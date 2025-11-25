@@ -30,9 +30,9 @@ gem install mailganer-client
 require "mailganer_client"
 
 MailganerClient.configure do |config|
-  config.api_key: "your-smtp-api-key",
-  config.smtp_login: "xxx",
-  config.api_key_web_portal: "your-web-portal-api-key"
+  config.api_key = "your-smtp-api-key"
+  config.smtp_login = "xxx"
+  config.api_key_web_portal = "your-web-portal-api-key"
 end
 
 client = MailganerClient.new
