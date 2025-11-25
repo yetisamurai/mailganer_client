@@ -3,6 +3,24 @@ require "net/http"
 require "uri"
 require "json"
 
+##
+# Client for interacting with the Mailganer API.
+#
+# Provides sending emails, bulk mailing, stop-list operations,
+# statistics, domain management, and delivery status checks.
+#
+# @example Sending a simple email
+#   client = MailganerClient.new(
+#     api_key: "...",
+#     smtp_login: "...",
+#     api_key_web_portal: "..."
+#   )
+#   client.send_email(
+#     to: "user@example.com",
+#     subject: "Hello",
+#     body: "Email body",
+#     from: "sender@example.com"
+#  
 class MailganerClient
   class ApiError < StandardError
     attr_reader :code, :body
@@ -12,14 +30,57 @@ class MailganerClient
   class AuthorizationError < ApiError; end
   class BadRequestError < ApiError; end
 
-  def initialize(api_key:, smtp_login:, api_key_web_portal:, host: 'https://api.samotpravil.ru/')
+
+  class << self
+    attr_accessor :configuration
+  end
+
+  def self.configure
+    self.configuration ||= Configuration.new
+    yield(configuration)
+  end
+
+  class Configuration
+    attr_accessor :api_key, :smtp_login, :api_key_web_portal, :host, :debug
+  end
+
+  ##
+  # Initializes API client
+  #
+  # @param api_key [String]  SMTP API key for sending
+  # @param smtp_login [String] SMTP login 
+  # @param api_key_web_portal [String] API key for web portal
+  # @param debug [Boolean] enable HTTP debug logging
+  # @param host [String] base API URL
+  #
+
+  def initialize(
+      api_key: MailganerClient.configuration&.api_key,
+      smtp_login: MailganerClient.configuration&.smtp_login,
+      api_key_web_portal: MailganerClient.configuration&.api_key_web_portal,
+      host: MailganerClient.configuration&.host || "https://api.samotpravil.ru/",
+      debug: MailganerClient.configuration&.debug || false
+    )
     @api_key = api_key
     @api_key_web_portal = api_key_web_portal
     @host = host.chomp('/') + '/'
     @smtp_login = smtp_login
+    @debug = debug
   end
 
   private
+
+  ##
+  # Executes a HTTP request
+  #
+  # @param method [String] HTTP method (GET/POST)
+  # @param endpoint [String] API endpoint
+  # @param data [Hash,nil] request body
+  # @param without_content_type [Boolean] remove Content-Type header
+  #
+  # @return [Hash] parsed JSON response
+  # @raise [ApiError] if API returns an error
+  #
 
   def request(method, endpoint, data = nil, without_content_type = false)
     uri = URI.join(@host, endpoint)
@@ -46,12 +107,14 @@ class MailganerClient
 
     req.body = data.to_json if data
 
-    puts "==== HTTP DEBUG ===="
-    puts "Method: #{method.upcase}"
-    puts "URL: #{uri}"
-    puts "Headers: #{req.each_header.to_h}"
-    puts "Body: #{req.body}" if req.body
-    puts "==================="
+    if (@debug)
+      puts "==== HTTP DEBUG ===="
+      puts "Method: #{method.upcase}"
+      puts "URL: #{uri}"
+      puts "Headers: #{req.each_header.to_h}"
+      puts "Body: #{req.body}" if req.body
+      puts "==================="
+    end
 
     begin
       res = http.request(req)
@@ -82,11 +145,31 @@ class MailganerClient
     json
   end
 
+  ##
+  # Validates email format
+  #
+  # @param email [String]
+  # @raise [ApiError] if invalid
+  #
+
   def validate_email!(email)
     raise ApiError, 'Invalid email' unless email =~ URI::MailTo::EMAIL_REGEXP
   end
 
   public
+
+  ##
+  # Sends a simple email
+  #
+  # @param to [String] recipient email
+  # @param subject [String] subject line
+  # @param body [String,nil] message body
+  # @param from [String] sender email
+  # @param name_from [String,nil] sender name
+  # @param params [Hash,nil] template params
+  #
+  # @return [Hash]
+  #
 
   def send_email(to:, subject:, body: nil, from:, name_from: nil, params: nil)
     validate_email!(to)
@@ -102,6 +185,19 @@ class MailganerClient
     request('POST', 'api/v2/mail/send', data)
   end
 
+  ##
+  # Sends email using SMTP v1 (template or raw body)
+  #
+  # @param type [String] "template" or "body"
+  # @param to [String]
+  # @param subject [String]
+  # @param body [String,nil]
+  # @param from [String]
+  # @param name_from [String,nil]
+  # @param template_id [Integer,nil]
+  # @param params [Hash,nil]
+  # @param attach_files [Array]
+  #
   def send_email_smtp_v1(type:, to:, subject:, body: nil, from:, name_from: nil, template_id: nil, params: nil, attach_files: [])
     validate_email!(to)
     validate_email!(from)
@@ -115,7 +211,7 @@ class MailganerClient
       track_click: true,
       email_from: name_from ? "#{name_from} <#{from}>" : from,
       attach_files: attach_files,
-      x_track_id: "#{@smtp_login}-#{Time.current.to_i}-#{SecureRandom.hex(6)}",
+      x_track_id: "#{@smtp_login}-#{Time.now.to_i}-#{SecureRandom.hex(6)}",
     }
 
     case type
@@ -130,6 +226,15 @@ class MailganerClient
     request('POST', "api/v1/smtp_send?key=#{@api_key}", data)
   end
 
+  ##
+  # Sends a bulk email package
+  #
+  # @param users [Array<Hash>] recipient data
+  # @param subject [String]
+  # @param body [String]
+  # @param from [String]
+  # @param name_from [String,nil]
+  #
   def send_emails_package(users:, subject:, body:, from:, name_from: nil)
     validate_email!(from)
 
@@ -177,21 +282,49 @@ class MailganerClient
     request('POST', "api/v1/add_json_package?key=#{@api_key}", data)
   end
 
+  ##
+  # Stops a bulk email package
+  #
+  # @param pack_id [Integer]
+  #
   def stop_emails_package(pack_id:)
     params = { key: @api_key, pack_id: pack_id }
     request('GET', "api/v1/package_stop", params)
   end
 
+
+  ##
+  # Gets status of a bulk package
+  #
+  # @param pack_id [Integer]
+  #
   def status_emails_package(pack_id:)
     params = { issuen: pack_id}
     request('GET', "api/v2/package/status", params)
   end
 
+  ##
+  # Gets delivery status of a specific message
+  #
+  # @param email [String,nil]
+  # @param x_track_id [String,nil]
+  # @param message_id [String,nil]
+  #
   def status_email_delivery(email: nil, x_track_id: nil, message_id: nil)
     params = { email: email, x_track_id: x_track_id, message_id: message_id }.compact
     request('GET', "api/v2/issue/status", params)
   end
 
+  ##
+  # Retrieves statistics
+  #
+  # @param date_from [String]
+  # @param date_to [String]
+  # @param limit [Integer]
+  # @param cursor_next [String,nil]
+  # @param timestamp_from [Integer,nil]
+  # @param timestamp_to [Integer,nil]
+  #
   def get_statistics(date_from:, date_to:, limit: 100, cursor_next: nil, timestamp_from: nil, timestamp_to: nil)
     #?date_from=2023-11-01&date_to=2023-11-07
     #?timestamp_from=1706795600&timestamp_to=1706831999&
@@ -214,55 +347,94 @@ class MailganerClient
     request('GET', "api/v2/issue/statistics", params)
   end
 
+
+  ##
+  # Non-delivered emails by date
+  #
   def get_non_delivery_by_date(date_from:, date_to:, limit: 5, cursor_next: nil, order: nil)
     params = { date_from: date_from, date_to: date_to, limit: limit, cursor_next: cursor_next, order: order }.compact
     request('GET', "api/v2/blist/report/non-delivery", params)
   end
 
+  ##
+  # Non-delivered emails by issue
+  #
   def get_non_delivery_by_issue(issue:, limit: 5, cursor_next: nil, order: nil)
     params = { issuen: issue, limit: limit, cursor_next: cursor_next, order: order }.compact
     request('GET', "api/v2/issue/report/non-delivery", params)
   end
 
+  ##
+  # FBL (abuse complaints) by date
+  #
   def get_fbl_report_by_date(date_from:, date_to:, limit: 5, cursor_next: nil)
     params = { date_from: date_from, date_to: date_to, limit: limit, cursor_next: cursor_next }.compact
     request('GET', "api/v2/blist/report/fbl", params)
   end
 
+  ##
+  # FBL (abuse complaints) by issue
+  #
   def get_fbl_report_by_issue(issue:, limit: 5, cursor_next: nil)
     params = { issuen: issue, limit: limit, cursor_next: cursor_next }.compact
     request('GET', "api/v2/issue/report/fbl?", params)
   end
 
+  ##
+  # Searches email in stop-list
+  #
+  # @param email [String]
+  #
   def stop_list_search(email:)
     validate_email!(email)
     request('GET', 'api/v2/stop-list/search', { email: email })
   end
 
+  ##
+  # Adds email to stop-list
+  #
   def stop_list_add(email:, mail_from:)
     validate_email!(email)
     request('POST', "api/v2/stop-list/add?#{URI.encode_www_form(mail_from: mail_from, email: email)}", nil, true)
   end
 
+  ##
+  # Removes email from stop-list
+  #
   def stop_list_remove(email:, mail_from:)
     validate_email!(email)
     request('POST', "api/v2/stop-list/remove?#{URI.encode_www_form(mail_from: mail_from, email: email)}", nil, true)
   end
 
+
+  ##
+  # Checks domain verification status
+  #
   def domain_check_verification(domain:,client_name:)
     request('POST',"api/v2/blist/domains/verify", {domain: domain, client: client_name})
   end
 
+  ##
+  # Adds domain
+  #
   def domains_add(domain:)
     params = { domain: domain }
     request('POST',"api/v2/blist/domains/add", params)
   end
 
+  ##
+  # Removes domain
+  #
   def domains_remove(domain:)
     params = { domain: domain }
     request('POST', "api/v2/blist/domains/remove", params)
   end
 
+  ##
+  # Lists all domains
+  #
+  # @return [Hash]
+  #
   def domains_list
     request('GET', "api/v2/blist/domains")
   end
