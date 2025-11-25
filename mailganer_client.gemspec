@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name          = "mailganer-client"
-  spec.version = "0.1.0"
+  spec.version = "0.1.1"
   spec.authors       = ["yetisamurai"]
   spec.email         = ["yetisamurai@proton.me"]
 
