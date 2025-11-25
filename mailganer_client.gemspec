@@ -15,4 +15,7 @@ Gem::Specification.new do |spec|
   spec.required_ruby_version = ">= 2.7"
   spec.add_dependency "json"
   spec.add_dependency "net-http"
+  spec.extra_rdoc_files = ["README.md"]
+  spec.has_rdoc = true
+  spec.rdoc_options = ["--main", "README.md"]
 end
